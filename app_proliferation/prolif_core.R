@@ -12,6 +12,7 @@
 
 library(mgcv)
 library(ggplot2)
+library(patchwork)
 
 PARAM_NAMES <- c(growth = "Growth (doublings/h)", lag = "Lag (h)", onset = "Onset of control (h)",
                  control = "Time to control (h)", max = "Maximum (log2 CFU)")
@@ -148,17 +149,14 @@ fmt_ci <- function(est, low, high, digits = 1) {
 
 plot_curves <- function(res, tab, cols, xlab = "Time post-injection (h)") {
   lv <- res$lv; e <- res$est; p <- tab$params
-  panels <- c("Fitted log2 load", "Growth rate (doublings per hour)",
-              paste0("Difference: ", lv[2], " - ", lv[1], " (log2)"))
-  cv <- res$curves; cv$panel <- factor(panels[cv$panel], levels = panels)
+  cv <- res$curves
   pts <- res$data
   pts$group <- ifelse(pts$time == res$t0, "Start", as.character(pts$group))
-  pts$panel <- factor(panels[1], levels = panels)
   ci <- function(g, k) quantile(res$sim[[g]][[k]], c(0.025, 0.975), na.rm = TRUE)
   nudge <- setNames(c(-0.35, 0.35), lv)               # the two lag points share the start level
   marks <- do.call(rbind, lapply(lv, function(g) {
     x <- e[[g]]
-    data.frame(group = g, panel = factor(panels[c(1, 1, 2, 2)], levels = panels),
+    data.frame(group = g, panel = c(1, 1, 2, 2),
                x = c(x$lag, x$t_max, x$onset, x$control),
                y = c(x$y_start + nudge[[g]], x$max, x$growth, x$y_control),
                xlo = c(ci(g, "lag")[1], NA, ci(g, "onset")[1], ci(g, "control")[1]),
@@ -168,60 +166,68 @@ plot_curves <- function(res, tab, cols, xlab = "Time post-injection (h)") {
   }))
   marks <- marks[is.finite(marks$x) & is.finite(marks$y), ]
   tangent <- do.call(rbind, lapply(lv, function(g) {
-    x <- e[[g]]
-    data.frame(group = g, panel = factor(panels[1], levels = panels),
-               x = x$lag, xend = x$onset, y = x$y_start + nudge[[g]], yend = x$y_growth)
+    x <- e[[g]]; data.frame(group = g, x = x$lag, xend = x$onset, y = x$y_start + nudge[[g]], yend = x$y_growth)
   }))
   tangent <- tangent[is.finite(tangent$x), ]
-  dd <- cv[cv$group == "Difference", ]
-  div <- data.frame(group = "Difference", panel = factor(panels[3], levels = panels), x = res$band_excl$From)
-  div <- div[div$x > res$t0, , drop = FALSE]
-  zero <- data.frame(panel = factor(panels[2:3], levels = panels), y = 0)
+  div <- data.frame(x = res$band_excl$From); div <- div[div$x > res$t0, , drop = FALSE]
 
-  # above the panels: the difference for each parameter, its 95% interval and the reading
-  short <- c(growth = "Growth (dbl/h)", lag = "Lag (h)", onset = "Ctrl onset (h)", control = "Control (h)", max = "Max (log2)")
-  w <- 19
-  ab <- if (substr(lv[1], 1, 1) != substr(lv[2], 1, 1)) substr(lv, 1, 1) else abbreviate(lv, 3)
-  row_txt <- function(name, vals) paste0(formatC(name, width = -10), paste(formatC(vals, width = -w), collapse = ""))
-  subtitle <- paste(row_txt("", short[p$key]),
-                    row_txt(paste0(ab[2], "-", ab[1]), fmt_ci(p$diff, p$diff_low, p$diff_high)),
-                    row_txt("", p$verdict), sep = "\n")
   allcols <- c(cols[lv], Start = "grey35", Difference = "black")
-  ggplot(cv, aes(time, est, colour = group, fill = group)) +
-    geom_hline(data = zero, aes(yintercept = y), colour = "grey60", linetype = "dashed") +
+  sc <- function(keys, legend) list(
+    scale_colour_manual(values = allcols, breaks = keys, limits = names(allcols), name = NULL),
+    scale_fill_manual(values = allcols, breaks = keys, limits = names(allcols), name = NULL),
+    scale_x_continuous(breaks = sort(unique(res$data$time))),
+    theme_classic(base_size = 11),
+    theme(plot.title = element_text(face = "bold", size = 11)),
+    if (!legend) guides(colour = "none", fill = "none"))
+  mk <- function(k) list(
+    geom_segment(data = marks[marks$panel == k & !is.na(marks$xlo), ], inherit.aes = FALSE,
+                 aes(x = xlo, xend = xhi, y = y, yend = y, colour = group), linewidth = 0.7),
+    geom_segment(data = marks[marks$panel == k & !is.na(marks$ylo), ], inherit.aes = FALSE,
+                 aes(x = x, xend = x, y = ylo, yend = yhi, colour = group), linewidth = 0.7),
+    geom_point(data = marks[marks$panel == k, ], inherit.aes = FALSE, aes(x = x, y = y, colour = group),
+               shape = 21, fill = "white", size = 2.6, stroke = 1.1))
+  curve <- function(k) ggplot(cv[cv$panel == k, ], aes(time, est, colour = group, fill = group)) +
+    geom_ribbon(aes(ymin = low, ymax = high), alpha = 0.2, colour = NA) + geom_line(linewidth = 0.9)
+
+  p_load <- curve(1) +
     geom_point(data = pts, aes(time, log2_load, colour = group), inherit.aes = FALSE, size = 1, alpha = 0.45) +
-    geom_ribbon(aes(ymin = low, ymax = high), alpha = 0.2, colour = NA) +
-    geom_line(linewidth = 0.9) +
     geom_segment(data = tangent, inherit.aes = FALSE, aes(x = x, xend = xend, y = y, yend = yend, colour = group),
                  linetype = "dotted", linewidth = 0.6) +
-    geom_segment(data = marks[!is.na(marks$xlo), ], inherit.aes = FALSE,
-                 aes(x = xlo, xend = xhi, y = y, yend = y, colour = group), linewidth = 0.7) +
-    geom_segment(data = marks[!is.na(marks$ylo), ], inherit.aes = FALSE,
-                 aes(x = x, xend = x, y = ylo, yend = yhi, colour = group), linewidth = 0.7) +
-    geom_point(data = marks, inherit.aes = FALSE, aes(x = x, y = y, colour = group),
-               shape = 21, fill = "white", size = 2.8, stroke = 1.1) +
+    mk(1) + sc(c(lv, "Start"), TRUE) + labs(title = "Fitted load", x = xlab, y = "log2 CFU per fly")
+  p_rate <- curve(2) + geom_hline(yintercept = 0, colour = "grey60", linetype = "dashed") +
+    mk(2) + sc(lv, FALSE) + labs(title = "Growth rate", x = xlab, y = "Doublings per hour")
+  p_diff <- curve(3) + geom_hline(yintercept = 0, colour = "grey60", linetype = "dashed") +
     geom_vline(data = div, aes(xintercept = x), linetype = "dotted", colour = "grey30") +
     geom_text(data = div, inherit.aes = FALSE, aes(x = x, y = Inf, label = paste0("differ from ", round(x, 1), " h")),
-              hjust = -0.08, vjust = 1.5, size = 3.3) +
-    facet_wrap(~panel, ncol = 1, scales = "free_y") +
-    scale_colour_manual(values = allcols, breaks = names(allcols), limits = names(allcols), name = NULL) +
-    scale_fill_manual(values = allcols, breaks = names(allcols), limits = names(allcols), name = NULL) +
-    scale_x_continuous(breaks = sort(unique(res$data$time))) +
-    labs(x = xlab, y = NULL, subtitle = subtitle,
-         caption = paste0(
-           "GAM fits with 95% bands (simultaneous for the difference), including smoothing uncertainty; both groups start\n",
-           "at the dose measured at time 0. Top: end of the lag (dotted tangent at the steepest point) and maximum load.\n",
-           "Middle: fastest growth = onset of control, and time to control (growth below ", 100 * res$control_frac,
-           "% of its maximum). Bottom: difference;\n",
-           "dotted line: from when the simultaneous band excludes 0. Bars: 95% intervals from ", format(res$n_sim, big.mark = ","),
-           " draws. n.r.: not reached by ", max(res$tgrid), " h.\n",
-           "Above: ", lv[2], " - ", lv[1], " [95% interval] for the five parameters examined; differ = 95% interval excludes 0;\n",
-           "equivalent = 90% interval within the margin set beforehand; otherwise inconclusive.")) +
-    theme_classic(base_size = 12) +
-    theme(legend.position = "top", strip.background = element_blank(),
-          strip.text = element_text(hjust = 0, face = "bold"),
-          plot.subtitle = element_text(family = "mono", size = 7.5),
-          plot.caption = element_text(hjust = 0, size = 8))
+              hjust = 1.05, vjust = 1.5, size = 3.3) +
+    sc("Difference", FALSE) + labs(title = paste0("Difference, ", lv[2], " - ", lv[1]), x = xlab, y = "log2 difference")
+
+  # the five parameters: the difference, its 95% interval and the reading
+  short <- c(growth = "Growth (doublings/h)", lag = "Lag (h)", onset = "Onset of control (h)", control = "Time to control (h)", max = "Maximum (log2 CFU)")
+  tb <- data.frame(y = rev(seq_len(nrow(p))), par = short[p$key], d = fmt_ci(p$diff, p$diff_low, p$diff_high), v = p$verdict)
+  hdr <- nrow(p) + 1.2
+  p_tab <- ggplot(tb) +
+    geom_text(aes(0, y, label = par), hjust = 0, size = 3.4) +
+    geom_text(aes(0.45, y, label = d), hjust = 0, size = 3.4) +
+    geom_text(aes(0.82, y, label = v, fontface = ifelse(v == "differ", "bold", "plain")), hjust = 0, size = 3.4) +
+    annotate("text", x = c(0, 0.45, 0.82), y = hdr, label = c("Parameter", "Difference\n[95% interval]", "Reading"), vjust = 0.3, lineheight = 0.9,
+             hjust = 0, size = 3.4, fontface = "bold") +
+    annotate("segment", x = 0, xend = 1.02, y = hdr - 0.65, yend = hdr - 0.65, linewidth = 0.3) +
+    scale_x_continuous(limits = c(0, 1.05), expand = c(0, 0)) + scale_y_continuous(limits = c(0.4, hdr + 0.7)) +
+    labs(title = paste0("Five parameters examined, ", lv[2], " - ", lv[1])) + theme_void(base_size = 11) +
+    theme(plot.title = element_text(face = "bold", size = 11), plot.margin = margin(5, 5, 5, 15))
+
+  (p_load + p_rate) / (p_diff + p_tab) +
+    patchwork::plot_layout(guides = "collect") +
+    patchwork::plot_annotation(caption = paste0(
+      "GAM fits with 95% bands (simultaneous for the difference), including smoothing uncertainty; both groups start at the dose measured at time 0.\n",
+      "Fitted load: end of the lag (dotted tangent at the steepest point) and maximum. Growth rate: fastest growth = onset of control, and time to control\n",
+      "(growth below ", 100 * res$control_frac, "% of its maximum). Bars: 95% intervals from ", format(res$n_sim, big.mark = ","), " draws. ",
+      "Difference: dotted line from where the simultaneous band excludes 0.\n",
+      "Readings: differ = 95% interval excludes 0; equivalent = 90% interval within the margin set beforehand; otherwise inconclusive. n.r.: not reached by ",
+      max(res$tgrid), " h."),
+      theme = theme(plot.caption = element_text(hjust = 0, size = 8.5))) &
+    theme(legend.position = "top")
 }
 
 # Individual flies over time, with medians from the common start and the detection limit.

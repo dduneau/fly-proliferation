@@ -8,6 +8,7 @@ library(shiny)
 library(bslib)
 library(mgcv)
 library(ggplot2)
+library(patchwork)
 if (FALSE) { library(svglite); library(jsonlite) }   # declares them to shinylive, which bundles the packages it finds in library() calls
 has_svglite <- requireNamespace("svglite", quietly = TRUE)
 `%||%` <- function(a, b) if (is.null(a)) b else a
@@ -15,6 +16,7 @@ source("prolif_core.R")
 
 APP_VERSION <- "1.0"
 EXAMPLE_FILE <- "example_proliferation_CS_sexdim.csv"
+EXAMPLE_TIME0 <- "example_time0_CS_sexdim.csv"
 N_SIM <- 10000          # protocol, step 4
 CONTROL_FRAC <- 0.1     # protocol, step 6d
 PALETTE <- c("#1f5fbf", "#e8850c", "#2a9d6f", "#c0398a", "#7a5cc4", "#8c6d1f", "#3a3a3a", "#d1453b")
@@ -88,49 +90,43 @@ params_table <- function(tab, lv) {
   out
 }
 
-methods_text <- function(all, tabs, s, n_left) {
+# The methods paragraph, as short paragraphs: a character vector, one element per paragraph
+methods_text <- function(all, tabs, s, n_left, n_t0) {
   lv <- s$lv
-  one <- function(nm) {
-    res <- all[[nm]]; tab <- tabs[[nm]]
-    if (inherits(res, "error")) return(sprintf("%s: the model could not be fitted (%s).", nm, conditionMessage(res)))
-    st <- res$smooth_test; p <- tab$params; kc <- res$kcheck
-    band <- if (nrow(res$band_excl)) paste0("excluded zero from ", paste(sprintf("%.1f to %.1f h (%s)", res$band_excl$From, res$band_excl$To, res$band_excl$Sign), collapse = " and "))
-            else "included zero over the whole window"
-    pars <- paste(sprintf("%s: %s %s, %s %s, difference %s",
-                          PARAM_TEXT[p$key], lv[1], fmt_ci(p$est1, p$low1, p$high1, 2), lv[2], fmt_ci(p$est2, p$low2, p$high2, 2),
-                          fmt_ci(p$diff, p$diff_low, p$diff_high, 2)), collapse = "; ")
-    eq <- p$verdict %in% c("equivalent", "inconclusive")
-    paste0(if (nm != "All") paste0(nm, ". ") else "",
-           sprintf("The difference smooth (%s - %s) had edf = %.2f, F = %.1f, %s. The basis check gave k-index = %.2f (%s). The simultaneous 95%% band of the difference %s. ",
-                   lv[2], lv[1], st$edf[2], st$F[2], pstat(st$p[2]), kc$k_index[2], pstat(kc$p[2]), band),
-           "Parameters, estimate [95% interval]: ", pars, ". ",
-           if (any(p$verdict == "differ")) paste0("The 95% interval of the difference excluded zero for ", paste(PARAM_TEXT[p$key[p$verdict == "differ"]], collapse = ", "), ". ") else "No 95% interval of a difference excluded zero. ",
-           if (any(p$verdict == "equivalent")) paste0("The groups were equivalent within the margins set beforehand for ", paste(PARAM_TEXT[p$key[p$verdict == "equivalent"]], collapse = ", "), ". ") else "",
-           if (any(p$verdict == "inconclusive")) paste0("The comparison was inconclusive for ", paste(PARAM_TEXT[p$key[p$verdict == "inconclusive"]], collapse = ", "), ". ") else "",
-           if (any(!tab$peak)) paste0("For ", paste(lv[!tab$peak], collapse = " and "), ", the maximum is the load at the end of the window, not a peak. ") else "",
-           if (any(p$draws_both < 99.5)) paste0("Parameters were not reached in every draw (", paste(sprintf("%s %.1f%%", PARAM_TEXT[p$key[p$draws_both < 99.5]], p$draws_both[p$draws_both < 99.5]), collapse = ", "),
-                                               " of draws in both groups); their intervals describe the draws in which they were reached. ") else "")
-  }
   first <- Filter(function(r) !inherits(r, "error"), all)[[1]]
   mg <- s$margins[is.finite(s$margins)]
-  paste0(
-    "The bacterial load of each fly was estimated from its colony counts across the dilution series with CFU Drop Counter and analysed in log2. ",
-    if (nzchar(s$filter_col) && length(s$filter_vals)) sprintf("Flies with %s = %s were analysed. ", s$filter_col, paste(s$filter_vals, collapse = ", ")) else "",
-    sprintf("Log2 load was modelled against time post-injection with a generalized additive model (mgcv): a smooth for %s and, for %s, a difference smooth entered through an ordered factor, each with basis dimension k = %d and penalized by REML. ",
+  intro <- c(
+    paste0("The bacterial load of each fly was estimated from its colony counts across the dilution series with CFU Drop Counter, and analysed in log2.",
+           if (nzchar(s$filter_col) && length(s$filter_vals)) sprintf(" Flies with %s = %s were analysed.", s$filter_col, paste(s$filter_vals, collapse = ", ")) else "",
+           if (n_left > 0) sprintf(" %d flies without a load (no colony, or no countable drop) were left out.", n_left) else ""),
+    sprintf("The inoculum was measured in %d tubes injected into PBS. It entered the model once, as observations at time 0, and is the common start of both curves.", n_t0),
+    sprintf("Log2 load was modelled against time post-injection with a generalized additive model (mgcv): a smooth for %s and, for %s, a difference smooth entered through an ordered factor, each with basis dimension k = %d and penalized by REML. The difference smooth was constrained to zero at time 0.",
             lv[1], lv[2], first$k_use),
-    "The inoculum, measured by injecting into PBS, entered as observations at time 0, once and under the reference level, and the difference smooth was constrained to zero at time 0, so that both curves start at the measured dose. ",
-    if (nzchar(s$inoc)) sprintf("Only the time 0 rows labelled %s were used as the inoculum. ", s$inoc) else "",
-    if (n_left > 0) sprintf("%d flies without a load (no colony, or no countable drop) were left out. ", n_left) else "",
-    sprintf("Intervals were obtained from %s coefficient vectors drawn from the fitted model, with the covariance including the uncertainty in the smoothing (random seed %d). ", format(N_SIM, big.mark = ","), s$seed),
-    "Whether the groups differ was assessed by the difference smooth and a simultaneous 95% band of the difference curve. ",
-    sprintf("Five parameters were read from each curve: growth, the steepest slope (doublings per hour); lag, the time at which the tangent at the steepest point crosses the starting load; onset of control, the time of the steepest slope; time to control, the first time after it at which the slope falls below %.0f%% of its maximum; and the maximum load within the window. ", 100 * CONTROL_FRAC),
-    "Each difference is given with its 95% interval",
-    if (length(mg)) paste0("; equivalence was declared where the 90% interval of the difference fell within margins set before the data were examined (", paste(sprintf("%s ±%s", PARAM_NAMES[names(mg)], mg), collapse = ", "), ")") else "",
-    ". ",
-    if (s$replicate != "") "Each replicate experiment was fitted separately. " else "",
-    sprintf("Time points used: %s h. ", paste(s$times_used, collapse = ", ")),
-    "Analysis made with the Fly Proliferation app version ", APP_VERSION, ".\n\n",
-    paste(vapply(names(all), one, ""), collapse = "\n\n"))
+    sprintf("Intervals came from %s coefficient vectors drawn from the fitted model, with the covariance including the uncertainty in the smoothing (random seed %d). Whether the groups differ was assessed by the difference smooth and by a simultaneous 95%% band of the difference curve.",
+            format(N_SIM, big.mark = ","), s$seed),
+    sprintf("Five parameters were read from each curve: growth, the steepest slope (doublings per hour); lag, the time at which the tangent at the steepest point crosses the starting load; onset of control, the time of the steepest slope; time to control, the first time after it at which the slope falls below %.0f%% of its maximum; and the maximum load within the window. Each difference is given with its 95%% interval%s.",
+            100 * CONTROL_FRAC,
+            if (length(mg)) paste0("; groups were called equivalent where the 90% interval of the difference fell within margins set before the data were examined (", paste(sprintf("%s ± %s", PARAM_TEXT[names(mg)], mg), collapse = ", "), ")") else ""),
+    paste0(if (s$replicate != "") "Each replicate experiment was fitted separately. " else "",
+           sprintf("Time points used: %s h. Analysis made with the Fly Proliferation app version %s.", paste(s$times_used, collapse = ", "), APP_VERSION)))
+  res_par <- unlist(lapply(names(all), function(nm) {
+    res <- all[[nm]]; tab <- tabs[[nm]]
+    head <- if (nm != "All") paste0(nm, ". ") else ""
+    if (inherits(res, "error")) return(sprintf("%sThe model could not be fitted (%s).", head, conditionMessage(res)))
+    st <- res$smooth_test; p <- tab$params; kc <- res$kcheck; be <- res$band_excl
+    c(paste0(head, sprintf("Results. The difference smooth (%s - %s) had edf = %.2f, F = %.1f, %s. The basis check gave k-index = %.2f (%s). ",
+                           lv[2], lv[1], st$edf[2], st$F[2], pstat(st$p[2]), kc$k_index[2], pstat(kc$p[2])),
+             "The simultaneous 95% band of the difference ",
+             if (nrow(be)) paste0("excluded zero from ", paste(sprintf("%.1f to %.1f h (%s)", be$From, be$To, be$Sign), collapse = " and "), ".") else "included zero over the whole window."),
+      paste(c("Parameters, estimate [95% interval]:",
+              sprintf("- %s: %s %s; %s %s; difference %s (%s)", PARAM_TEXT[p$key], lv[1], fmt_ci(p$est1, p$low1, p$high1, 2),
+                      lv[2], fmt_ci(p$est2, p$low2, p$high2, 2), fmt_ci(p$diff, p$diff_low, p$diff_high, 2), p$verdict)), collapse = "\n"),
+      paste0(if (any(!tab$peak)) paste0("For ", paste(lv[!tab$peak], collapse = " and "), ", the maximum is the load at the end of the window, not a peak. ") else "",
+             if (any(p$draws_both < 99.5)) paste0("Some parameters were not reached in every draw (", paste(sprintf("%s %.1f%%", PARAM_TEXT[p$key[p$draws_both < 99.5]], p$draws_both[p$draws_both < 99.5]), collapse = ", "),
+                                                  " of draws in both groups); their intervals describe the draws in which they were reached.") else ""))
+  }))
+  out <- c(intro, res_par)
+  out[nzchar(out)]
 }
 
 r_code <- function(s) {
@@ -157,7 +153,7 @@ for (r in unique(d$replicate)) {                  # each replicate experiment se
   print(res$band_excl)          # step 5: where the simultaneous band excludes zero
   print(tab$params)             # steps 6, 8, 9
   print(tab$exist)              # draws in which each quantity exists
-  ggsave(paste0("Proliferation_curves_", r, ".pdf"), plot_curves(res, tab, cols), width = 7, height = 9)
+  ggsave(paste0("Proliferation_curves_", r, ".pdf"), plot_curves(res, tab, cols), width = 11, height = 8.5)
 }
 ')
 }
@@ -169,25 +165,24 @@ ui <- page_sidebar(
   sidebar = sidebar(width = 350,
     accordion(id = "steps", open = c("Data", "Comparison"),
       accordion_panel("Data", icon = icon("table"),
-        fileInput("file", NULL, accept = c(".csv", ".txt", ".tsv"), placeholder = "Per-fly table from CFU Drop Counter"),
-        actionLink("use_example", "Try the example (Canton-S females and males, P. rettgeri, 0 to 16 h)"),
-        div(class = "small text-muted mt-1", textOutput("data_info")),
-        p(class = "small text-muted mt-2", "The table must hold the inoculum tubes of the Time 0 plate, at time 0: both curves start at the dose they measure."),
-        selectInput("inoc", "Time 0 rows used as the inoculum", c("All of them" = ""), selectize = FALSE),
-        div(class = "small text-muted", style = "margin-top:-0.6rem",
-            "Chosen by their label in the column of the groups. Keep all of them unless some time 0 rows are not the injected dose.")),
+        fileInput("file", "1. The flies", accept = c(".csv", ".txt", ".tsv"), placeholder = "Per-fly table from CFU Drop Counter"),
+        fileInput("file0", "2. Time zero", accept = c(".csv", ".txt", ".tsv"), placeholder = "Inoculum tubes, from CFU Drop Counter"),
+        div(class = "small text-muted", style = "margin-top:-0.6rem; margin-bottom:0.6rem",
+            "The per-fly table of the Time 0 plate: the tubes injected into PBS. It is the common start of both curves."),
+        actionLink("use_example", "Try the example (Canton-S females and males, P. rettgeri)"),
+        div(class = "small text-muted mt-1", textOutput("data_info"))),
       accordion_panel("Comparison", icon = icon("scale-balanced"),
         selectInput("group", "Groups to compare (two)", NULL),
         textInput("order", "Order (comma-separated)", ""),
         div(class = "small text-muted", style = "margin-top:-0.6rem; margin-bottom:0.8rem",
-            "The first is the reference: it carries the inoculum, and differences are the second minus the first."),
+            "The first is the reference: differences are the second minus the first."),
         selectInput("filter_col", "Keep only flies where (optional)", NULL, selectize = FALSE),
         selectizeInput("filter_vals", NULL, choices = NULL, multiple = TRUE, options = list(placeholder = "values to keep")),
         div(class = "small text-muted", style = "margin-top:-0.6rem; margin-bottom:0.8rem",
-            "Applies to the flies; the inoculum tubes are always kept."),
+            "Applies to the flies; the time zero tubes are always kept."),
         selectInput("replicate", "Replicate experiment (optional)", NULL, selectize = FALSE),
         div(class = "small text-muted", style = "margin-top:-0.6rem",
-            "Each replicate is fitted separately, with its own inoculum, and the differences are compared between replicates rather than pooled.")),
+            "Each replicate is fitted separately, and the differences are compared between replicates rather than pooled. If the time zero file has the same column, each replicate starts at its own dose; otherwise all share it.")),
       accordion_panel("Model", icon = icon("chart-line"),
         checkboxGroupInput("times", "Time points used (h)", NULL, inline = TRUE),
         div(class = "small text-muted", style = "margin-top:-0.6rem; margin-bottom:0.8rem",
@@ -220,16 +215,16 @@ ui <- page_sidebar(
   navset_card_underline(
     nav_panel("Curves",
       uiOutput("rep_pick_curves"),
-      plotOutput("curves", height = "900px", width = "720px"),
+      plotOutput("curves", height = "820px"),
       div(dl_button("dl_pdf", "PDF"), dl_button("dl_png", "PNG"), if (has_svglite) dl_button("dl_svg", "SVG"))),
     nav_panel("Flies over time",
       uiOutput("rep_pick_flies"),
       plotOutput("flies_plot", height = "480px"),
       div(dl_button("dl_pdf2", "PDF"), dl_button("dl_png2", "PNG"), if (has_svglite) dl_button("dl_svg2", "SVG"))),
     nav_panel("Results", uiOutput("results_ui"), dl_button("dl_results", "Results (CSV)")),
-    nav_panel("Flies", p(class = "small text-muted", "Every row of the table, with how it was used. The R code runs on this table."),
+    nav_panel("Flies", p(class = "small text-muted", "Every fly and time zero tube, with how it was used. The R code runs on this table."),
               tableOutput("pf_table"), dl_button("dl_pf", "Table of flies (CSV)")),
-    nav_panel("Methods text", verbatimTextOutput("methods"), dl_button("dl_methods", "Text")),
+    nav_panel("Methods text", div(style = "max-width: 46rem", uiOutput("methods")), dl_button("dl_methods", "Text")),
     nav_panel("R code", p(class = "small text-muted", "The functions the app runs, then the analysis with the settings chosen. Runs on the table downloaded from the Flies tab."),
               verbatimTextOutput("rcode"), dl_button("dl_code", "R script"))
   )
@@ -237,13 +232,26 @@ ui <- page_sidebar(
 
 # ------------------------------------------------------------------ server
 server <- function(input, output, session) {
-  rv <- reactiveValues(d = NULL, name = NULL)
+  rv <- reactiveValues(d = NULL, name = NULL, d0 = NULL, name0 = NULL)
   observeEvent(input$file, {
     d <- tryCatch(read_any(input$file$datapath), error = function(e) NULL)
     if (is.null(d)) { showNotification("This file could not be read as a table.", type = "error"); return() }
     rv$d <- d; rv$name <- input$file$name
   })
-  observeEvent(input$use_example, { rv$d <- read_any(EXAMPLE_FILE); rv$name <- EXAMPLE_FILE; updateNumericInput(session, "seed", value = 99) })   # the seed of the original analysis
+  observeEvent(input$file0, {
+    d <- tryCatch(read_any(input$file0$datapath), error = function(e) NULL)
+    if (is.null(d)) { showNotification("The time zero file could not be read as a table.", type = "error"); return() }
+    rv$d0 <- d; rv$name0 <- input$file0$name
+  })
+  observeEvent(input$use_example, {
+    rv$d <- read_any(EXAMPLE_FILE); rv$name <- EXAMPLE_FILE
+    rv$d0 <- read_any(EXAMPLE_TIME0); rv$name0 <- EXAMPLE_TIME0
+    # the seed and the equivalence margins of the original analysis
+    updateNumericInput(session, "seed", value = 99)
+    updateNumericInput(session, "m_growth", value = 0.5); updateNumericInput(session, "m_lag", value = 1)
+    updateNumericInput(session, "m_onset", value = 1); updateNumericInput(session, "m_control", value = 1)
+    updateNumericInput(session, "m_max", value = 1)
+  })
 
   observeEvent(rv$d, {
     cols <- names(rv$d); none <- c("(none)" = "")
@@ -264,11 +272,6 @@ server <- function(input, output, session) {
     updateSelectizeInput(session, "filter_vals", choices = vals, selected = vals)
   }, ignoreInit = TRUE)
 
-  observeEvent(list(rv$d, input$group, input$time), {
-    req(rv$d, nzchar(input$group %||% ""), nzchar(input$time %||% ""))
-    tt <- num(rv$d[[input$time]]); labs <- sort(unique(chr(rv$d[[input$group]])[is.finite(tt) & tt == 0]))
-    updateSelectInput(session, "inoc", choices = c("All of them" = "", setNames(labs, paste("Labelled", labs))), selected = "")
-  })
   times_all <- reactive({ req(rv$d, nzchar(input$time %||% "")); tt <- num(rv$d[[input$time]]); sort(unique(tt[is.finite(tt) & tt > 0])) })
   # the protocol stops at 12 h for P. rettgeri, before mortality: later times start unselected
   observeEvent(times_all(), updateCheckboxGroupInput(session, "times", choices = times_all(), selected = times_all()[times_all() <= 12], inline = TRUE))
@@ -282,39 +285,59 @@ server <- function(input, output, session) {
     list(group = input$group, lv_all = lv_all, time = input$time, load_col = input$load_col, load_base = as.numeric(input$load_base),
          status_col = input$status_col %||% "", lod_col = input$lod_col %||% "", id = input$id %||% "",
          filter_col = input$filter_col %||% "", filter_vals = input$filter_vals %||% character(0),
-         replicate = input$replicate %||% "", inoc = input$inoc %||% "", times = num(input$times), k = max(3, round(input$k %||% 6)), seed = round(input$seed %||% 1),
+         replicate = input$replicate %||% "", times = num(input$times), k = max(3, round(input$k %||% 6)), seed = round(input$seed %||% 1),
          margins = mg, xlab = input$xlab)
   })
 
-  # every row, with its role and whether it enters the GAM
+  # the time zero tubes: same columns as a per-fly table of CFU Drop Counter, found by name
+  time0 <- reactive({
+    s <- settings(); d0 <- rv$d0
+    validate(need(!is.null(d0), "Load the time zero file too: the per-fly table of the Time 0 plate (tubes injected into PBS), saved by CFU Drop Counter. Both curves start at the dose it measures."))
+    cols <- names(d0)
+    lc <- if (s$load_col %in% cols) s$load_col else guess(cols, c("log2_CFU_per_fly", "log10_CFU_per_fly", "log2_load", "log10_load", "log2_CFU_fly", "log10_CFU_fly"))
+    validate(need(nzchar(lc), sprintf("The time zero file has no load column (%s).", paste(cols, collapse = ", "))))
+    base <- if (lc == s$load_col) s$load_base else if (grepl("log10", lc)) 10 else 2
+    y <- num(d0[[lc]]) * log2(base)
+    st <- if ("Status" %in% cols) as.character(d0$Status) else ifelse(is.finite(y), "Detected", "No load")
+    data.frame(ID = if ("ID" %in% cols) as.character(d0$ID) else paste0("time 0 row ", seq_len(nrow(d0))),
+               role = "inoculum", group_given = "Time 0", time = 0,
+               replicate = if (nzchar(s$replicate) && s$replicate %in% cols) chr(d0[[s$replicate]]) else NA_character_,
+               log2_load = round(y, 4), log2_lod = if ("LOD_per_fly" %in% cols) log2(num(d0$LOD_per_fly)) else NA_real_,
+               Status = st, stringsAsFactors = FALSE)
+  })
+
+  # every fly and time zero tube, with its role and whether it enters the GAM
   flies <- reactive({
     s <- settings(); d <- rv$d; req(d, nzchar(s$time), nzchar(s$load_col), nzchar(s$group))
     tt <- num(d[[s$time]])
     validate(need(all(is.finite(tt)), sprintf("%d row(s) have a time that is not a number.", sum(!is.finite(tt)))),
-             need(any(tt == 0), "No row at time 0. Add the inoculum tubes of the Time 0 plate to the layout, at time 0: both curves start at the dose they measure."),
              need(s$group != s$time, "The groups to compare cannot be the time column."),
              need(!(s$replicate %in% c(s$group, s$time)) || s$replicate == "", "The replicate must be a different column from the groups and the time."))
     y <- num(d[[s$load_col]]) * log2(s$load_base)                     # to log2
     status <- if (nzchar(s$status_col)) as.character(d[[s$status_col]]) else ifelse(is.finite(y), "Detected", "No load")
     lod <- if (nzchar(s$lod_col)) log2(num(d[[s$lod_col]])) else NA_real_
-    role <- ifelse(tt == 0, "inoculum", "fly")
-    grp <- chr(d[[s$group]])
-    keep <- if (nzchar(s$filter_col) && length(s$filter_vals)) role == "inoculum" | chr(d[[s$filter_col]]) %in% s$filter_vals else rep(TRUE, nrow(d))
+    keep <- tt > 0                                                     # time zero comes from its own file
+    if (nzchar(s$filter_col) && length(s$filter_vals)) keep <- keep & chr(d[[s$filter_col]]) %in% s$filter_vals
     pf <- data.frame(ID = if (nzchar(s$id)) as.character(d[[s$id]]) else paste0("row ", seq_len(nrow(d))),
-                     role = role, group_given = grp, time = tt,
+                     role = "fly", group_given = chr(d[[s$group]]), time = tt,
                      replicate = if (nzchar(s$replicate)) chr(d[[s$replicate]]) else "All",
                      log2_load = round(y, 4), log2_lod = lod, Status = status, stringsAsFactors = FALSE)[keep, ]
-    lv <- intersect(s$lv_all, unique(pf$group_given[pf$role == "fly"]))
+    lv <- intersect(s$lv_all, unique(pf$group_given))
     validate(need(length(lv) == 2, sprintf("The analysis compares two groups; %s holds %d among the flies kept (%s). Choose two with \"Keep only flies where\", or another column.",
                                            s$group, length(lv), paste(lv, collapse = ", "))))
+    # time zero: each replicate its own tubes when the file says which; otherwise shared by all
+    z <- time0()
+    reps <- unique(pf$replicate)
+    z <- if (all(is.na(z$replicate))) do.call(rbind, lapply(reps, function(r) transform(z, replicate = r))) else z[z$replicate %in% reps, ]
+    pf <- rbind(z, pf)
     pf$group <- ifelse(pf$role == "inoculum", lv[1], pf$group_given)  # the dose belongs to neither group: bookkeeping
     pf$detected <- pf$Status == "Detected" & is.finite(pf$log2_load)
     pf$used <- ifelse(!pf$detected, paste0("no (", pf$Status, ")"),
                       ifelse(pf$role == "fly" & !(pf$time %in% s$times), "no (time point not used)", "yes"))
-    if (nzchar(s$inoc)) pf$used[pf$role == "inoculum" & pf$group_given != s$inoc] <- "no (time 0 row not chosen as the inoculum)"
-    validate(need(sum(pf$used == "yes" & pf$role == "inoculum") > 0, "No inoculum tube at time 0 has a load."),
-             need(length(unique(pf$time[pf$used == "yes"])) >= 4, "At least three time points after injection are needed, besides time 0."))
+    validate(need(sum(pf$used == "yes" & pf$role == "inoculum") > 0, "No time zero tube has a load."),
+             need(length(unique(pf$time[pf$used == "yes"])) >= 4, "At least three time points after injection are needed."))
     attr(pf, "lv") <- lv
+    attr(pf, "t0_in_flies") <- sum(tt == 0)
     pf
   })
   lv <- reactive(attr(flies(), "lv"))
@@ -337,12 +360,12 @@ server <- function(input, output, session) {
   tabs <- reactive({ s <- settings(); lapply(results(), function(r) if (inherits(r, "error")) r else prolif_summary(r, s$margins)) })
 
   output$data_info <- renderText({
-    if (is.null(rv$d)) return("No data loaded.")
-    sprintf("%s: %d rows, %d columns.", rv$name, nrow(rv$d), ncol(rv$d))
+    paste(if (is.null(rv$d)) "Flies: not loaded." else sprintf("Flies: %s, %d rows.", rv$name, nrow(rv$d)),
+          if (is.null(rv$d0)) "Time zero: not loaded." else sprintf("Time zero: %s, %d tubes.", rv$name0, nrow(rv$d0)))
   })
 
   output$messages <- renderUI({
-    if (is.null(rv$d)) return(div(class = "alert alert-info", "Load the per-fly table saved by CFU Drop Counter (log2), with the inoculum tubes at time 0, or try the example."))
+    if (is.null(rv$d) || is.null(rv$d0)) return(div(class = "alert alert-info", "Load the two tables saved by CFU Drop Counter (log2): the flies, and the time zero tubes injected into PBS. Or try the example."))
     pf <- tryCatch(flies(), error = function(e) e)
     if (inherits(pf, "error")) return(div(class = "alert alert-danger", conditionMessage(pf)))
     w <- character(0)
@@ -353,28 +376,19 @@ server <- function(input, output, session) {
       w <- c(w, paste0("Flies without a load are left out of the GAM (", paste(sprintf("%s: %d", names(tb), tb), collapse = ", "), "), so the curve is fitted to the flies that have one",
                        if (max(share) > 0.1) "; at more than one fly in ten, this lifts the curve at those times. Report them, and consider analysing them as a binary outcome." else ". Report them."))
     }
-    inoc <- pf[pf$role == "inoculum", ]
     later <- setdiff(times_all(), settings()$times)
     if (length(later) && all(later > 12)) w <- c(w, sprintf("Times after 12 h (%s h) start unselected: the protocol stops at 12 h for P. rettgeri, before any mortality. Select them in Model if no fly had died by then.", paste(later, collapse = ", ")))
-    ml <- tapply(inoc$log2_load[inoc$detected], inoc$group_given[inoc$detected], median)
-    if (length(ml) > 1 && diff(range(ml)) > 1)
-      w <- c(w, sprintf("The time 0 rows differ by label: median log2 load %s, a %.0f-fold difference. %s",
-                        paste(sprintf("%.1f (%s)", ml, names(ml)), collapse = " vs "), 2^diff(range(ml)),
-                        if (nzchar(settings()$inoc)) sprintf("Only the rows labelled %s are used as the inoculum; state why in the paper.", settings()$inoc)
-                        else "If they are not all the injected dose, choose which rows are the inoculum under Data."))
-    inoc <- inoc[inoc$used == "yes" | !inoc$detected, ]
-    if (any(!inoc$detected)) w <- c(w, sprintf("%d inoculum tube(s) have no load and are left out.", sum(!inoc$detected)))
-    if (!nzchar(settings()$inoc) && (length(unique(inoc$group_given)) > 1 || any(inoc$group_given %in% lv())))
-      w <- c(w, sprintf("The time 0 rows carry the labels %s. They are used once, as the common start, under %s: the dose was measured in PBS and belongs to neither group.",
-                        paste(unique(inoc$group_given), collapse = ", "), lv()[1]))
+    if (attr(pf, "t0_in_flies") > 0) w <- c(w, sprintf("%d row(s) of the flies table are at time 0 and are not used: time zero comes from its own file.", attr(pf, "t0_in_flies")))
+    inoc <- pf[pf$role == "inoculum" & !duplicated(pf$ID), ]
+    if (any(!inoc$detected)) w <- c(w, sprintf("%d time zero tube(s) have no load and are left out.", sum(!inoc$detected)))
     for (nm in names(results())) {
       r <- results()[[nm]]; lab <- if (nm == "All") "" else paste0(nm, ": ")
-      if (inherits(r, "error")) { w <- c(w, paste0(lab, "the model could not be fitted (", conditionMessage(r), ").")); next }
+      if (inherits(r, "error")) { w <- c(w, paste0(lab, if (nzchar(lab)) "the" else "The", " model could not be fitted (", conditionMessage(r), ").")); next }
       kc <- r$kcheck
-      if (any(kc$p < 0.05 & kc$edf > 0.8 * kc$k)) w <- c(w, paste0(lab, "the basis check suggests too little flexibility (k-index below 1 with a small p and edf close to k'). Increase k and refit."))
+      if (any(kc$p < 0.05 & kc$edf > 0.8 * kc$k)) w <- c(w, paste0(lab, if (nzchar(lab)) "the" else "The", " basis check suggests too little flexibility (k-index below 1 with a small p and edf close to k'). Increase k and refit."))
       if (r$k_use < r$k) w <- c(w, sprintf("%sk was lowered to %d, the number of time points minus one.", lab, r$k_use))
       tb <- tabs()[[nm]]
-      if (any(tb$params$draws_both < 95)) w <- c(w, paste0(lab, "some parameters are missing in more than 5% of the draws (see Results); their intervals describe only the draws that reached them, the ones that reached them soonest."))
+      if (any(tb$params$draws_both < 95)) w <- c(w, paste0(lab, if (nzchar(lab)) "some" else "Some", " parameters are missing in more than 5% of the draws (see Results); their intervals describe only the draws that reached them, the ones that reached them soonest."))
     }
     if (length(reps()) > 1) w <- c(w, "Each replicate is fitted separately. Report the differences of every replicate and their agreement (Results), rather than counting how many are significant.")
     if (length(w)) div(class = "alert alert-warning", tags$ul(lapply(w, tags$li)))
@@ -389,7 +403,7 @@ server <- function(input, output, session) {
     r <- pick(input$rep_curves); res <- results()[[r]]; tab <- tabs()[[r]]
     validate(need(!inherits(res, "error"), "The model could not be fitted for this replicate."))
     p <- plot_curves(res, tab, group_colours(lv()), xlab = settings()$xlab)
-    if (r != "All") p + ggtitle(r) else p
+    if (r != "All") p + patchwork::plot_annotation(title = r) else p
   })
   output$curves <- renderPlot(the_curves(), res = 96)
 
@@ -452,22 +466,23 @@ server <- function(input, output, session) {
   output$pf_table <- renderTable(head(pf_out(), 60))
 
   methods <- reactive({
-    s <- settings(); s$lv <- lv(); s$times_used <- sort(c(0, s$times))
-    methods_text(results(), tabs(), s, sum(flies()$role == "fly" & !flies()$detected))
+    s <- settings(); s$lv <- lv(); s$times_used <- sort(c(0, s$times)); pf <- flies()
+    methods_text(results(), tabs(), s, sum(pf$role == "fly" & !pf$detected),
+                 sum(pf$role == "inoculum" & pf$used == "yes" & !duplicated(pf$ID)))
   })
-  output$methods <- renderText(methods())
+  output$methods <- renderUI(lapply(methods(), function(x) p(style = "white-space: pre-line", x)))
   code <- reactive({ s <- settings(); s$lv <- lv(); r_code(s) })
   output$rcode <- renderText(code())
 
-  observeEvent(input$dl_pdf, send_file(session, "Proliferation_curves.pdf", "application/pdf", function(f) ggsave(f, the_curves(), width = 7, height = 9)))
-  observeEvent(input$dl_png, send_file(session, "Proliferation_curves.png", "image/png", function(f) ggsave(f, the_curves(), width = 7, height = 9, dpi = 300)))
-  observeEvent(input$dl_svg, send_file(session, "Proliferation_curves.svg", "image/svg+xml", function(f) ggsave(f, the_curves(), width = 7, height = 9, device = svglite::svglite)))
+  observeEvent(input$dl_pdf, send_file(session, "Proliferation_curves.pdf", "application/pdf", function(f) ggsave(f, the_curves(), width = 11, height = 8.5)))
+  observeEvent(input$dl_png, send_file(session, "Proliferation_curves.png", "image/png", function(f) ggsave(f, the_curves(), width = 11, height = 8.5, dpi = 300)))
+  observeEvent(input$dl_svg, send_file(session, "Proliferation_curves.svg", "image/svg+xml", function(f) ggsave(f, the_curves(), width = 11, height = 8.5, device = svglite::svglite)))
   observeEvent(input$dl_pdf2, send_file(session, "Proliferation_flies.pdf", "application/pdf", function(f) ggsave(f, the_flies_plot(), width = 8, height = 5)))
   observeEvent(input$dl_png2, send_file(session, "Proliferation_flies.png", "image/png", function(f) ggsave(f, the_flies_plot(), width = 8, height = 5, dpi = 300)))
   observeEvent(input$dl_svg2, send_file(session, "Proliferation_flies.svg", "image/svg+xml", function(f) ggsave(f, the_flies_plot(), width = 8, height = 5, device = svglite::svglite)))
   observeEvent(input$dl_results, send_file(session, "Proliferation_results.csv", "text/csv", function(f) write.table(results_csv(), f, sep = ";", row.names = FALSE)))
   observeEvent(input$dl_pf, send_file(session, "Proliferation_flies.csv", "text/csv", function(f) write.csv(pf_out(), f, row.names = FALSE)))
-  observeEvent(input$dl_methods, send_file(session, "Proliferation_methods.txt", "text/plain", function(f) writeLines(methods(), f)))
+  observeEvent(input$dl_methods, send_file(session, "Proliferation_methods.txt", "text/plain", function(f) writeLines(paste(methods(), collapse = "\n\n"), f)))
   observeEvent(input$dl_code, send_file(session, "Proliferation_analysis.R", "text/plain", function(f) writeLines(code(), f)))
 }
 
