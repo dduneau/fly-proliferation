@@ -215,11 +215,11 @@ ui <- page_sidebar(
   navset_card_underline(
     nav_panel("Curves",
       uiOutput("rep_pick_curves"),
-      plotOutput("curves", height = "820px"),
+      div(style = "max-width: 1100px", plotOutput("curves", height = "auto")),
       div(dl_button("dl_pdf", "PDF"), dl_button("dl_png", "PNG"), if (has_svglite) dl_button("dl_svg", "SVG"))),
     nav_panel("Flies over time",
       uiOutput("rep_pick_flies"),
-      plotOutput("flies_plot", height = "480px"),
+      div(style = "max-width: 1000px", plotOutput("flies_plot", height = "auto")),
       div(dl_button("dl_pdf2", "PDF"), dl_button("dl_png2", "PNG"), if (has_svglite) dl_button("dl_svg2", "SVG"))),
     nav_panel("Results", uiOutput("results_ui"), dl_button("dl_results", "Results (CSV)")),
     nav_panel("Flies", p(class = "small text-muted", "Every fly and time zero tube, with how it was used. The R code runs on this table."),
@@ -405,7 +405,8 @@ server <- function(input, output, session) {
     p <- plot_curves(res, tab, group_colours(lv()), xlab = settings()$xlab)
     if (r != "All") p + patchwork::plot_annotation(title = r) else p
   })
-  output$curves <- renderPlot(the_curves(), res = 96)
+  # same shape on screen as the saved file (11 x 8.5 in), whatever the width of the window
+  output$curves <- renderPlot(the_curves(), res = 96, height = function() round(session$clientData$output_curves_width * 8.5 / 11))
 
   the_flies_plot <- reactive({
     r <- pick(input$rep_flies); pf <- flies(); s <- settings()
@@ -413,7 +414,7 @@ server <- function(input, output, session) {
     p <- plot_flies(fl, lv(), 0, group_colours(lv()), xlab = s$xlab)
     if (r != "All") p + ggtitle(r) else p
   })
-  output$flies_plot <- renderPlot(the_flies_plot(), res = 96)
+  output$flies_plot <- renderPlot(the_flies_plot(), res = 96, height = function() round(session$clientData$output_flies_plot_width * 5 / 8))
 
   output$results_ui <- renderUI({
     l <- lv()
