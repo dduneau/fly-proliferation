@@ -17,14 +17,14 @@ Two tables, both saved by **[CFU Drop Counter](https://dduneau.github.io/cfu-dro
 
 Further rules:
 
-- **Times are in hours.** Use only times before any mortality (protocol, CRITICAL note in "Quantification of Early Bacterial Proliferation"). Times after 12 h start unselected, since the protocol stops there for *P. rettgeri*. Rows of the flies table at time 0 are not used: time zero comes from its own file.
+- **Times are in hours.** Use only times before any mortality (protocol, CRITICAL note in "Quantification of Early Bacterial Proliferation"). Rows of the flies table at time 0 are not used: time zero comes from its own file.
 - **Only flies and tubes with the status `Detected` enter the model.** Flies without a load are listed in the Flies tab and counted in a warning, and are shown at their detection limit in the plot of flies.
 
 Any tables with one row per fly (or tube) and a log2 (or log10) load work as well, separated by commas, semicolons or tabs, with decimal points or decimal commas. Column names in the flies table are free: you tell the app which column plays which role. In the time zero table the app looks for the load column by the same name, or by the names CFU Drop Counter uses.
 
 ### Example data set
 
-The experiment of the protocol's figure: Canton-S females and males injected with *P. rettgeri* (OD 0.1), and sampled hourly to 16 h, 8 per sex and time point.
+The experiment of the protocol's figure: Canton-S females and males injected with *P. rettgeri* (OD 0.1), and sampled hourly from 1 to 12 h, 8 per sex and time point.
 
 - `example_proliferation_CS_sexdim.csv` holds the flies.
 - `example_time0_CS_sexdim.csv` holds the 8 time zero tubes.

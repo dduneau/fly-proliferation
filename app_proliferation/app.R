@@ -169,7 +169,7 @@ ui <- page_sidebar(
         fileInput("file0", "2. Time zero", accept = c(".csv", ".txt", ".tsv"), placeholder = "Inoculum tubes, from CFU Drop Counter"),
         div(class = "small text-muted", style = "margin-top:-0.6rem; margin-bottom:0.6rem",
             "The per-fly table of the Time 0 plate: the tubes injected into PBS. It is the common start of both curves."),
-        actionLink("use_example", "Try the example (Canton-S females and males, P. rettgeri)"),
+        actionLink("use_example", "Try the example (Canton-S females and males, P. rettgeri, 1 to 12 h)"),
         div(class = "small text-muted mt-1", textOutput("data_info"))),
       accordion_panel("Comparison", icon = icon("scale-balanced"),
         selectInput("group", "Groups to compare (two)", NULL),
@@ -273,8 +273,7 @@ server <- function(input, output, session) {
   }, ignoreInit = TRUE)
 
   times_all <- reactive({ req(rv$d, nzchar(input$time %||% "")); tt <- num(rv$d[[input$time]]); sort(unique(tt[is.finite(tt) & tt > 0])) })
-  # the protocol stops at 12 h for P. rettgeri, before mortality: later times start unselected
-  observeEvent(times_all(), updateCheckboxGroupInput(session, "times", choices = times_all(), selected = times_all()[times_all() <= 12], inline = TRUE))
+  observeEvent(times_all(), updateCheckboxGroupInput(session, "times", choices = times_all(), selected = times_all(), inline = TRUE))
   fly_groups <- reactive({ req(rv$d, nzchar(input$group %||% ""), nzchar(input$time %||% "")); tt <- num(rv$d[[input$time]]); chr(rv$d[[input$group]])[is.finite(tt) & tt > 0] })
   observeEvent(list(rv$d, input$group), { req(nzchar(input$group %||% "")); updateTextInput(session, "order", value = paste(default_order(fly_groups()), collapse = ", ")) })
 
@@ -376,8 +375,6 @@ server <- function(input, output, session) {
       w <- c(w, paste0("Flies without a load are left out of the GAM (", paste(sprintf("%s: %d", names(tb), tb), collapse = ", "), "), so the curve is fitted to the flies that have one",
                        if (max(share) > 0.1) "; at more than one fly in ten, this lifts the curve at those times. Report them, and consider analysing them as a binary outcome." else ". Report them."))
     }
-    later <- setdiff(times_all(), settings()$times)
-    if (length(later) && all(later > 12)) w <- c(w, sprintf("Times after 12 h (%s h) start unselected: the protocol stops at 12 h for P. rettgeri, before any mortality. Select them in Model if no fly had died by then.", paste(later, collapse = ", ")))
     if (attr(pf, "t0_in_flies") > 0) w <- c(w, sprintf("%d row(s) of the flies table are at time 0 and are not used: time zero comes from its own file.", attr(pf, "t0_in_flies")))
     inoc <- pf[pf$role == "inoculum" & !duplicated(pf$ID), ]
     if (any(!inoc$detected)) w <- c(w, sprintf("%d time zero tube(s) have no load and are left out.", sum(!inoc$detected)))
