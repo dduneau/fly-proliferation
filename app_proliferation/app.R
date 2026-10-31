@@ -102,7 +102,7 @@ methods_text <- function(all, tabs, s, n_left, n_t0) {
     sprintf("The inoculum was measured in %d tubes injected into PBS. It entered the model once, as observations at time 0, and is the common start of both curves.", n_t0),
     sprintf("Log2 load was modelled against time post-injection with a generalized additive model (mgcv): a smooth for %s and, for %s, a difference smooth entered through an ordered factor, each with basis dimension k = %d and penalized by REML. The difference smooth was constrained to zero at time 0.",
             lv[1], lv[2], first$k_use),
-    sprintf("Intervals came from %s coefficient vectors drawn from the fitted model, with the covariance including the uncertainty in the smoothing (random seed %d). Whether the groups differ was assessed by the difference smooth and by a simultaneous 95%% band of the difference curve.",
+    sprintf("Intervals came from %s coefficient vectors drawn from the fitted model, with the covariance including the uncertainty in the smoothing (random seed %d). Whether the groups differ was assessed by a simultaneous 95%% band of the difference curve, and by the approximate test of the difference smooth.",
             format(N_SIM, big.mark = ","), s$seed),
     sprintf("Five parameters were read from each curve: growth, the steepest slope (doublings per hour); lag, the time at which the tangent at the steepest point crosses the starting load; onset of control, the time of the steepest slope; time to control, the first time after it at which the slope falls below %.0f%% of its maximum; and the maximum load within the window. Each difference is given with its 95%% interval%s.",
             100 * CONTROL_FRAC,
@@ -114,10 +114,10 @@ methods_text <- function(all, tabs, s, n_left, n_t0) {
     head <- if (nm != "All") paste0(nm, ". ") else ""
     if (inherits(res, "error")) return(sprintf("%sThe model could not be fitted (%s).", head, conditionMessage(res)))
     st <- res$smooth_test; p <- tab$params; kc <- res$kcheck; be <- res$band_excl
-    c(paste0(head, sprintf("Results. The difference smooth (%s - %s) had edf = %.2f, F = %.1f, %s. The basis check gave k-index = %.2f (%s). ",
-                           lv[2], lv[1], st$edf[2], st$F[2], pstat(st$p[2]), kc$k_index[2], pstat(kc$p[2])),
-             "The simultaneous 95% band of the difference ",
-             if (nrow(be)) paste0("excluded zero from ", paste(sprintf("%.1f to %.1f h (%s)", be$From, be$To, be$Sign), collapse = " and "), ".") else "included zero over the whole window."),
+    c(paste0(head, "Results. The simultaneous 95% band of the difference ",
+             if (nrow(be)) paste0("excluded zero from ", paste(sprintf("%.1f to %.1f h (%s)", be$From, be$To, be$Sign), collapse = " and "), ". ") else "included zero over the whole window. ",
+             sprintf("The difference smooth (%s - %s) had edf = %.2f, F = %.1f, approximate %s. The basis check gave k-index = %.2f (%s).",
+                     lv[2], lv[1], st$edf[2], st$F[2], pstat(st$p[2]), kc$k_index[2], pstat(kc$p[2]))),
       paste(c("Parameters, estimate [95% interval]:",
               sprintf("- %s: %s %s; %s %s; difference %s (%s)", PARAM_TEXT[p$key], lv[1], fmt_ci(p$est1, p$low1, p$high1, 2),
                       lv[2], fmt_ci(p$est2, p$low2, p$high2, 2), fmt_ci(p$diff, p$diff_low, p$diff_high, 2), p$verdict)), collapse = "\n"),
@@ -301,7 +301,7 @@ server <- function(input, output, session) {
     data.frame(ID = if ("ID" %in% cols) as.character(d0$ID) else paste0("time 0 row ", seq_len(nrow(d0))),
                role = "inoculum", group_given = "Time 0", time = 0,
                replicate = if (nzchar(s$replicate) && s$replicate %in% cols) chr(d0[[s$replicate]]) else NA_character_,
-               log2_load = round(y, 4), log2_lod = if ("LOD_per_fly" %in% cols) log2(num(d0$LOD_per_fly)) else NA_real_,
+               log2_load = y, log2_lod = if ("LOD_per_fly" %in% cols) log2(num(d0$LOD_per_fly)) else NA_real_,
                Status = st, stringsAsFactors = FALSE)
   })
 
@@ -320,7 +320,7 @@ server <- function(input, output, session) {
     pf <- data.frame(ID = if (nzchar(s$id)) as.character(d[[s$id]]) else paste0("row ", seq_len(nrow(d))),
                      role = "fly", group_given = chr(d[[s$group]]), time = tt,
                      replicate = if (nzchar(s$replicate)) chr(d[[s$replicate]]) else "All",
-                     log2_load = round(y, 4), log2_lod = lod, Status = status, stringsAsFactors = FALSE)[keep, ]
+                     log2_load = y, log2_lod = lod, Status = status, stringsAsFactors = FALSE)[keep, ]
     lv <- intersect(s$lv_all, unique(pf$group_given))
     validate(need(length(lv) == 2, sprintf("The analysis compares two groups; %s holds %d among the flies kept (%s). Choose two with \"Keep only flies where\", or another column.",
                                            s$group, length(lv), paste(lv, collapse = ", "))))
@@ -375,6 +375,8 @@ server <- function(input, output, session) {
       w <- c(w, paste0("Flies without a load are left out of the GAM (", paste(sprintf("%s: %d", names(tb), tb), collapse = ", "), "), so the curve is fitted to the flies that have one",
                        if (max(share) > 0.1) "; at more than one fly in ten, this lifts the curve at those times. Report them, and consider analysing them as a binary outcome." else ". Report them."))
     }
+    ids <- pf$ID[pf$role == "fly"]; dup <- unique(ids[duplicated(ids)])
+    if (length(dup)) w <- c(w, sprintf("Some fly IDs appear more than once in the flies table (%s): check that no fly is entered twice.", paste(head(dup, 5), collapse = ", ")))
     if (attr(pf, "t0_in_flies") > 0) w <- c(w, sprintf("%d row(s) of the flies table are at time 0 and are not used: time zero comes from its own file.", attr(pf, "t0_in_flies")))
     inoc <- pf[pf$role == "inoculum" & !duplicated(pf$ID), ]
     if (any(!inoc$detected)) w <- c(w, sprintf("%d time zero tube(s) have no load and are left out.", sum(!inoc$detected)))
@@ -420,18 +422,19 @@ server <- function(input, output, session) {
       if (inherits(res, "error")) return(p(sprintf("%s: the model could not be fitted (%s).", nm, conditionMessage(res))))
       st <- res$smooth_test; kc <- res$kcheck; be <- res$band_excl
       tagList(if (nm != "All") h5(nm),
-        h6("Does the difference smooth differ from zero? (step 2)"),
-        renderTable(transform(st, edf = f1(edf), F = f1(F), p = fmt_p(p))),
-        h6(sprintf("Basis check, k = %d (step 3)", res$k_use)),
-        renderTable(transform(kc, edf = f1(edf), k_index = f1(k_index), p = fmt_p(p))),
-        p(class = "small text-muted", "A k-index below 1 with a small p and an edf close to k' means too little flexibility: increase k."),
         h6("Where the groups differ: simultaneous 95% band of the difference (step 5)"),
         p(if (nrow(be)) paste0("The band excludes zero from ", paste(sprintf("%.1f to %.1f h (%s)", be$From, be$To, be$Sign), collapse = "; "), ".")
-          else "The band includes zero over the whole window."),
-        p(class = "small text-muted", "At time 0 the difference is zero by construction, so where the band first excludes zero depends on the anchoring and the smoothing; it is not an estimate of when the groups began to diverge."),
+          else "The band includes zero over the whole window: no difference is shown at any time."),
+        p(class = "small text-muted", "This is the test of whether the groups differ at any time: in simulations of the protocol's design with no difference, the band excluded zero in about 6% of experiments, close to the 5% expected. At time 0 the difference is zero by construction, so where the band first excludes zero depends on the anchoring and the smoothing; it is not an estimate of when the groups began to diverge."),
+        h6("Difference smooth (step 2)"),
+        renderTable(transform(st, edf = f1(edf), F = f1(F), p = fmt_p(p))),
+        p(class = "small text-muted", "The p-values of smooths are approximate. In the same simulations the difference smooth gave p < 0.05 in about 11% of experiments with no difference, twice the 5% expected: read it with the band, not instead of it."),
+        h6(sprintf("Basis check, k = %d (step 3)", res$k_use)),
+        renderTable(transform(kc, edf = f1(edf), k_index = f1(k_index), p = fmt_p(p))),
+        p(class = "small text-muted", "A k-index below 1 with a small p and an edf close to k' means too little flexibility: increase k, and report how the parameters change."),
         h6(sprintf("Five parameters and their differences (steps 6, 8 and 9; seed %d, %s draws)", res$seed, format(res$n_sim, big.mark = ","))),
         renderTable(params_table(tab, l)),
-        p(class = "small text-muted", "Five parameters were examined; weigh the pattern rather than one verdict. Growth, lag and onset of control are all read from the steepest point, so they are not independent. Differ: the 95% interval of the difference excludes 0. Equivalent: its 90% interval lies within the margin. A non-significant difference is not evidence of equality."),
+        p(class = "small text-muted", "Five parameters were examined; weigh the pattern rather than one verdict. Growth, lag and onset of control are all read from the steepest point, so they are not independent. Differ: the 95% interval of the difference excludes 0 (\"differ, within margin\" when its 90% interval also lies within the margin: real, but smaller than the difference set as meaningful). Equivalent: the 90% interval lies within the margin. A non-significant difference is not evidence of equality."),
         h6("Draws in which each quantity exists"),
         renderTable(tab$exist, digits = 1),
         if (any(!tab$peak)) p(sprintf("For %s, the maximum is the load at the last time point, not a peak: label it as such.", paste(l[!tab$peak], collapse = " and "))),

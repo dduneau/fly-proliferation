@@ -65,16 +65,31 @@ The app opens the example with the seed and the equivalence margins of the origi
   - the share of draws in which each parameter exists in both groups;
   - with replicates, the differences of every replicate side by side.
 
-  "Differ" means the 95% interval of the difference excludes zero. Five parameters are examined, and the protocol asks for the pattern to be weighed rather than one verdict.
+  "Differ" means the 95% interval of the difference excludes zero; "differ, within margin" means it does, but the 90% interval also lies within the margin, so the difference is real but smaller than the one set as meaningful. Five parameters are examined, and the protocol asks for the pattern to be weighed rather than one verdict.
 - **Flies**: every fly and time zero tube, with its role and whether it entered the model.
 - **Methods text**: a paragraph with the model, the settings and the results.
 - **R code**: the functions the app runs (`prolif_core.R`), then the analysis with the settings chosen. It runs on the table from the Flies tab and reproduces the app's results exactly.
+
+## How well the tests hold their level
+
+`tools/simulate_no_difference.R` simulates 200 experiments of the protocol's design in which the two groups share the same curve (the females of the example, with their observed spread). In these experiments each test should call about 5% of them different. They did so as follows:
+
+| Test | Called different |
+|---|---|
+| Simultaneous 95% band of the difference | 6.0% |
+| Difference smooth, p < 0.05 | 11.0% |
+| Growth, lag, onset of control, time to control, maximum (95% interval excludes 0) | 4.0%, 1.5%, 0.0%, 1.5%, 8.0% |
+
+The simultaneous band holds its level, so the app reads it as the test of whether the groups differ. The p-value of the difference smooth is approximate, as for any penalized smooth in mgcv, and too optimistic here: the app reports it as approximate. The intervals of the parameters are conservative or close to nominal.
+
+The model is not symmetric in the two groups: the reference has its own smooth and the other group a difference smooth. With the example, swapping the reference moved the differences by up to 0.3 (lag) and changed no reading. Choose the reference before looking at the results.
 
 ## Repository layout and updating
 
 ```
 app_proliferation/   the app: app.R, prolif_core.R (the analysis) and the two example files (edit here)
 docs/                the published site, made by shinylive from app_proliferation/ (do not edit)
+tools/               simulate_no_difference.R, the check of the tests above (not part of the app)
 ```
 
 To update the app, edit `app_proliferation/app.R` or `prolif_core.R`, then in R, from the repository folder:
