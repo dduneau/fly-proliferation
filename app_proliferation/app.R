@@ -91,39 +91,49 @@ params_table <- function(tab, lv) {
 }
 
 # The methods paragraph, as short paragraphs: a character vector, one element per paragraph
-methods_text <- function(all, tabs, s, n_left, n_t0) {
+# 'info': flies per group, flies left out (by group and time), and the dose measured at time zero
+PARAM_UNIT <- c(growth = " doublings/h", lag = " h", onset = " h", control = " h", max = " log2 CFU")
+methods_text <- function(all, tabs, s, info) {
   lv <- s$lv
   first <- Filter(function(r) !inherits(r, "error"), all)[[1]]
   mg <- s$margins[is.finite(s$margins)]
+  nl <- length(info$left)
+  versions <- sprintf("%s, mgcv %s", sub("R version ([0-9.]+).*", "R \\1", R.version.string), as.character(packageVersion("mgcv")))
   intro <- c(
-    paste0("The bacterial load of each fly was estimated from its colony counts across the dilution series with CFU Drop Counter, and analysed in log2.",
+    paste0("The bacterial load of each fly was estimated by maximum likelihood from its colony counts across the dilution series, with CFU Drop Counter, and analysed in log2. ",
+           sprintf("The analysis used %s%s.", paste(sprintf("%d flies of %s", info$n[lv], lv), collapse = " and "),
+                   if (info$n_rep > 1) sprintf(", over %d replicate experiments", info$n_rep) else ""),
            if (nzchar(s$filter_col) && length(s$filter_vals)) sprintf(" Flies with %s = %s were analysed.", s$filter_col, paste(s$filter_vals, collapse = ", ")) else "",
-           if (n_left > 0) sprintf(" %d flies without a load (no colony, or no countable drop) were left out.", n_left) else ""),
-    sprintf("The inoculum was measured in %d tubes injected into PBS. It entered the model once, as observations at time 0, and is the common start of both curves.", n_t0),
-    sprintf("Log2 load was modelled against time post-injection with a generalized additive model (mgcv): a smooth for %s and, for %s, a difference smooth entered through an ordered factor, each with basis dimension k = %d and penalized by REML. The difference smooth was constrained to zero at time 0.",
+           if (nl == 1) sprintf(" One fly without a load estimate was left out (%s).", info$left) else
+           if (nl > 1) sprintf(" %d flies without a load estimate were left out (%s).", nl, paste(info$left, collapse = "; ")) else ""),
+    sprintf("The inoculum was measured in %d tubes injected into PBS (median %.1f log2 bacteria per injection). It entered the model once, as observations at time 0, and is the common start of both curves.",
+            info$n_t0, info$dose),
+    sprintf("Log2 load was modelled against time post-injection with a generalized additive model: a smooth for %s and, for %s, a difference smooth entered through an ordered factor, each with basis dimension k = %d and with smoothing parameters estimated by REML. The difference smooth was constrained to zero at time 0.",
             lv[1], lv[2], first$k_use),
-    sprintf("Intervals came from %s coefficient vectors drawn from the fitted model, with the covariance including the uncertainty in the smoothing (random seed %d). Whether the groups differ was assessed by a simultaneous 95%% band of the difference curve, and by the approximate test of the difference smooth.",
+    sprintf("Uncertainty was obtained from %s coefficient vectors drawn from the fitted model, with the covariance including the uncertainty in the smoothing parameters (random seed %d); 95%% intervals are the 2.5th and 97.5th percentiles across the draws. Whether the groups differ was assessed by a simultaneous 95%% band of the difference curve, computed from the same draws, and by the approximate test of the difference smooth.",
             format(N_SIM, big.mark = ","), s$seed),
-    sprintf("Five parameters were read from each curve: growth, the steepest slope (doublings per hour); lag, the time at which the tangent at the steepest point crosses the starting load; onset of control, the time of the steepest slope; time to control, the first time after it at which the slope falls below %.0f%% of its maximum; and the maximum load within the window. Each difference is given with its 95%% interval%s.",
+    sprintf("Five parameters were read from each curve: growth, the steepest slope (doublings per hour); lag, the time at which the tangent at the steepest point crosses the fitted load at time 0; onset of control, the time of the steepest slope; time to control, the first time after it at which the slope falls below %.0f%% of its maximum; and the maximum load within the window. Each parameter and each difference between the groups is given with its 95%% interval%s.",
             100 * CONTROL_FRAC,
-            if (length(mg)) paste0("; groups were called equivalent where the 90% interval of the difference fell within margins set before the data were examined (", paste(sprintf("%s ± %s", PARAM_TEXT[names(mg)], mg), collapse = ", "), ")") else ""),
+            if (length(mg)) paste0("; a parameter was called equivalent between the groups when the 90% interval of its difference fell within a margin set before the data were examined (", paste(sprintf("%s ± %s%s", PARAM_TEXT[names(mg)], mg, PARAM_UNIT[names(mg)]), collapse = ", "), ")") else ""),
     paste0(if (s$replicate != "") "Each replicate experiment was fitted separately. " else "",
-           sprintf("Time points used: %s h. Analysis made with the Fly Proliferation app version %s.", paste(s$times_used, collapse = ", "), APP_VERSION)))
+           sprintf("Time points used: %s h. Analysis made with the Fly Proliferation app version %s (%s).", paste(s$times_used, collapse = ", "), APP_VERSION, versions)))
   res_par <- unlist(lapply(names(all), function(nm) {
     res <- all[[nm]]; tab <- tabs[[nm]]
     head <- if (nm != "All") paste0(nm, ". ") else ""
     if (inherits(res, "error")) return(sprintf("%sThe model could not be fitted (%s).", head, conditionMessage(res)))
     st <- res$smooth_test; p <- tab$params; kc <- res$kcheck; be <- res$band_excl
+    side <- function(sg) ifelse(grepl("above", sg), paste(lv[2], "higher than", lv[1]), paste(lv[2], "lower than", lv[1]))
     c(paste0(head, "Results. The simultaneous 95% band of the difference ",
-             if (nrow(be)) paste0("excluded zero from ", paste(sprintf("%.1f to %.1f h (%s)", be$From, be$To, be$Sign), collapse = " and "), ". ") else "included zero over the whole window. ",
-             sprintf("The difference smooth (%s - %s) had edf = %.2f, F = %.1f, approximate %s. The basis check gave k-index = %.2f (%s).",
-                     lv[2], lv[1], st$edf[2], st$F[2], pstat(st$p[2]), kc$k_index[2], pstat(kc$p[2]))),
+             if (nrow(be)) paste0("excluded zero from ", paste(sprintf("%.1f to %.1f h (%s)", be$From, be$To, side(be$Sign)), collapse = " and "), ". ") else "included zero over the whole window. ",
+             sprintf("The difference smooth (%s - %s) had edf = %.2f, F = %.1f, approximate %s. ", lv[2], lv[1], st$edf[2], st$F[2], pstat(st$p[2])),
+             sprintf("The basis check (k' = %d) gave k-index = %.2f with %s for the smooth of %s, and %s for the difference smooth.",
+                     kc$k[1], kc$k_index[1], pstat(kc$p[1]), lv[1], pstat(kc$p[2]))),
       paste(c("Parameters, estimate [95% interval]:",
-              sprintf("- %s: %s %s; %s %s; difference %s (%s)", PARAM_TEXT[p$key], lv[1], fmt_ci(p$est1, p$low1, p$high1, 2),
+              sprintf("- %s (%s): %s %s; %s %s; difference %s (%s)", PARAM_TEXT[p$key], trimws(PARAM_UNIT[p$key]), lv[1], fmt_ci(p$est1, p$low1, p$high1, 2),
                       lv[2], fmt_ci(p$est2, p$low2, p$high2, 2), fmt_ci(p$diff, p$diff_low, p$diff_high, 2), p$verdict)), collapse = "\n"),
       paste0(if (any(!tab$peak)) paste0("For ", paste(lv[!tab$peak], collapse = " and "), ", the maximum is the load at the end of the window, not a peak. ") else "",
-             if (any(p$draws_both < 99.5)) paste0("Some parameters were not reached in every draw (", paste(sprintf("%s %.1f%%", PARAM_TEXT[p$key[p$draws_both < 99.5]], p$draws_both[p$draws_both < 99.5]), collapse = ", "),
-                                                  " of draws in both groups); their intervals describe the draws in which they were reached.") else ""))
+             if (any(p$draws_both < 99.5)) paste0("Not every draw reached every parameter within the window (reached in both groups: ", paste(sprintf("%s, %.1f%% of draws", PARAM_TEXT[p$key[p$draws_both < 99.5]], p$draws_both[p$draws_both < 99.5]), collapse = "; "),
+                                                  "); the intervals describe the draws in which they were reached.") else ""))
   }))
   out <- c(intro, res_par)
   out[nzchar(out)]
@@ -468,8 +478,15 @@ server <- function(input, output, session) {
 
   methods <- reactive({
     s <- settings(); s$lv <- lv(); s$times_used <- sort(c(0, s$times)); pf <- flies()
-    methods_text(results(), tabs(), s, sum(pf$role == "fly" & !pf$detected),
-                 sum(pf$role == "inoculum" & pf$used == "yes" & !duplicated(pf$ID)))
+    fl <- pf[pf$role == "fly" & pf$time %in% s$times, ]
+    t0 <- pf[pf$role == "inoculum" & pf$used == "yes" & !duplicated(pf$ID), ]
+    left <- fl[!fl$detected, ]
+    info <- list(n = table(factor(fl$group[fl$used == "yes"], levels = lv())),
+                 left = if (nrow(left)) sprintf("%s at %s h%s, %s", left$group, left$time,
+                                                if (nzchar(s$replicate)) paste0(" in ", left$replicate) else "", tolower(left$Status)) else character(0),
+                 n_rep = length(unique(fl$replicate)),
+                 n_t0 = nrow(t0), dose = median(t0$log2_load))
+    methods_text(results(), tabs(), s, info)
   })
   output$methods <- renderUI(lapply(methods(), function(x) p(style = "white-space: pre-line", x)))
   code <- reactive({ s <- settings(); s$lv <- lv(); r_code(s) })
